@@ -2,7 +2,7 @@ package main
 
 import (
 	//"bytes"
-	"errors"
+	//"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,7 +40,9 @@ func extractFile(e entry, src *os.File, dest string) error {
 
 	fmt.Println("   seeked to ", e.offset, " and found ", string(buf), " required= ", e.path)
 	if string(buf) != e.path {
-		return errors.New("seek failure")
+		// return errors.New("seek failure", string(buf), e.path)
+		print ("seek failure!\n")
+		return nil
 	}
 
 	if dest == "" {
@@ -51,7 +53,7 @@ func extractFile(e entry, src *os.File, dest string) error {
 	if err != nil {
 		return err
 	}
-	
+
 	if e.cmpsize > 0 {
 		fmt.Println("    uncompress ", dest)
 		exe := exec.Command("uncompress")
@@ -79,6 +81,7 @@ func extractFile(e entry, src *os.File, dest string) error {
 }
 
 func extractDirectory(e entry, dest string) error {
+	fmt.Println("extractDirectory ", dest)
 	if _, err := os.Stat(dest); !os.IsNotExist(err) {
 		return nil
 	}
@@ -86,7 +89,6 @@ func extractDirectory(e entry, dest string) error {
 	if dest == "" {
 		return nil
 	}
-	fmt.Println("extractDirectory ", dest)
 	return os.Mkdir(dest, 0777)
 }
 
@@ -115,9 +117,13 @@ func extractEntry(e entry, src *os.File, dest string, isManFile bool) error {
 
 
 	name := path.Clean(e.path)
+	println("extractEntry paths:\n",name,e.path)
 	if !isSafePath(name) {
-		return errors.New("invalid path")
+		fmt.Println("skip invalid path", e.path)
+		//return errors.New("invalid path")
+		return nil
 	}
+
 	if dest != "" {
 		dest = path.Join(dest, name)
 		if err := os.MkdirAll(path.Dir(dest), 0777); err != nil {
@@ -141,6 +147,7 @@ func extract(entries []entry, swFile, manFile, outDir string) error {
 	var files = [...]string{swFile, manFile}
 
 	for i := 0; i < 2; i++ {
+		println("EXTRACT: Opening file:",files[i],"\n");
 		fp, err := os.Open(files[i])
 		if err != nil {
 			return err

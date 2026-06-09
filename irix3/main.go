@@ -48,6 +48,7 @@ func mainE() error {
 		outDir = "./out"
 	}
 
+	fmt.Println("RUNNING EXTRACT",swFile,manFile,outDir,"\n");
 	return extract(ents, swFile, manFile, outDir)
 }
 
