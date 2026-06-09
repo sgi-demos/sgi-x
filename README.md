@@ -41,7 +41,7 @@ sgix dev.idb dev.sw outdir
 # Tape image from https://fsck.technology/software/Silicon%20Graphics/IRIX%20Install%20Media/SGI%20IRIX%204D1%203.3%20%28Tape%29/Tape%20Images.rar
 # Unarchive Tape Images.rar
 cd 4d1-3.3-eoe-tape-2
-sgi-x/irix3/sgix . eoe2.idb eoe2.sw eoe2.man outdir
+sgi-x/irix3/sgix eoe2.idb eoe2.sw eoe2.man outdir
 cd outdir
 find . -name "*gview*" -print
 cd usr/catman/u_man/cat6
