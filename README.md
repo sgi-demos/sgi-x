@@ -1,65 +1,71 @@
 # SGI Extractor
 
-Extracts from `*.sw`, `*.idb`, etc. sets of SGI install files.  This is a fork of https://github.com/depp/sgix, that aims to expand handling of install files to all major IRIX releases (3, 4, 5, 6).  The goal with this fork is to be able to extract SGI demo source and man pages, so it has only been tested on install files containing those things. IRIX 4 is untested, it may work with the IRIX 5 & 6 version of sgi-x.
+Extracts files from `*.sw`, `*.idb`, `*.man` install images.  This is a Python fork of https://github.com/depp/sgix, expanded to handle all IRIX releases (3, 4, 5, 6).  The goal with this fork is to be able to extract SGI demo source and man pages, so it has only been tested on install files containing those things. IRIX 4 is currently untested.
 
-## Build
+## Requirements
 
-1. Install Go.
-```
-brew install go
-```
+- Python 3.9 or newer. Standard library only is needed.
+- `uncompress`, automatically used to decompress LZW-compressed (`cmpsize`) entries.
+- `gzip`, automatically used to decompress inline `.z` entries on IRIX 5/6.
+- `gunzip`, manually used to decompress IRIX 3 `.z` man pages after extraction.
 
-2a. For IRIX 5 & 6, build the top-level Go files:
-
-```
-go get
-go build
-```
-
-2b. For IRIX 3, build sgi-x specific version from irix3 dir:
-```
-cd irix3
-go get
-go build
-```
-
-Note: IRIX 4 is untested, it may work with the IRIX 5 & 6 version of sgi-x.
-
-## Extract
+## Usage
 
 ```
-Usage: sgix <file.idb> [<file.sw> [<file.man>] [<output dir>]] 
+sgix.py [--irix {3,4,5,6}] [-v] <file.idb> [<file.sw>] [<file.man>] [<output dir>]
 ```
 
-1. General example: Let's say you have a `*.sw` and `*.idb` file. It's an extracted "tardist" file from an SGI IRIX iso or tape image. Do this:
+- Specify arguments in any order.
+- Arguments `*.idb`, `*.sw`, and `*.man` are matched automatically by their suffix, and anything else is treated as the output directory.
+- Pass only the `.idb` file to parse the index and report how many entries are found.
+
+Options:
+- `--irix {3,4,5,6}` — IRIX generation. Defaults to `6`. IRIX 3 needs the `.man` archive in addition to `.sw`.
+- `-o`, `--out DIR` — output directory. Omit it entirely to run in verify-only mode, which checks that every entry lines up with its archive but writes nothing.
+- `-v`, `--verbose` — emit a detailed trace (entry parsing, offset math, and per-file extraction steps) to stdout.
+- Explicit flags (`--idb`, `--sw`, `--man`, `-o/--out`) override the suffix matching if you need them.
+
+## Examples
+
+1. Extract an IRIX 5/6 tardist set from an IRIX ISO or tape image:
+
 ```
-sgix dev.idb dev.sw outdir
+sgix.py dev.idb dev.sw outdir
 ```
 
-2. Specific example using IRIX 3.3 tape image to obtain the gview demo man page:
+2. Extract the `gview` demo man page from an IRIX 3.3 tape image:
+
 ```
 # Tape image from https://fsck.technology/software/Silicon%20Graphics/IRIX%20Install%20Media/SGI%20IRIX%204D1%203.3%20%28Tape%29/Tape%20Images.rar
 # Unarchive Tape Images.rar
 cd 4d1-3.3-eoe-tape-2
-sgi-x/irix3/sgix eoe2.idb eoe2.sw eoe2.man outdir
+sgix.py --irix 3 eoe2.idb eoe2.sw eoe2.man outdir
 cd outdir
 find . -name "*gview*" -print
 cd usr/catman/u_man/cat6
 gunzip -c gview.z > gview-man-page.txt
 ```
 
-This will create a folder called `outdir` with the extracted contents.
+## How the IRIX versions differ
+
+`sgix.py` drives all per-version quirks from a single format table:
+
+- **IRIX 3** splits the data across two archives: `.z` entries are read from the `.man` file and everything else from `.sw`.  The `.z` man pages are copied raw, symlinks in the index are not recreated, and sync or path problems are warned about and skipped rather than treated as fatal. Archive offsets start at 2.
+- **IRIX 5 and 6** use a single `.sw` archive, decompress inline `.z` entries with `gzip`, recreate symlinks, and treat any sync or unsafe-path issue as a hard error. Archive offsets start at 13.
+- **IRIX 4** is untested and uses the IRIX 5/6 layout.
+
+In every version, an entry's compressed payload (`cmpsize`) is run through `uncompress` when present.
 
 ## Further Development
-
- - Really should unify the binary and test extraction for all IRIX releases 3-6.
+ - Will fix bugs as necessary to extract files needed.
  - A hex editor (like https://hexfiend.com/) is useful for debugging (getting the info from the .idb to match the reality of the .sw and .man files).
+
 
 ## License
 
 Licensed under the MIT license. See `LICENSE.txt`.
 
-## See Also
+## See also
 
- - http://persephone.cps.unizar.es/~spd/src/other/mydb.c
- - https://github.com/depp/sgix
+- Original Go tool: https://github.com/depp/sgix
+- Reference IDB format notes: http://persephone.cps.unizar.es/~spd/src/other/mydb.c
