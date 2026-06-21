@@ -352,6 +352,18 @@ def main(argv: list[str]) -> int:
         return 1
 
     fmt = FORMATS[ns.irix]
+
+    # If the data archives weren't named, look for siblings next to the .idb
+    # (e.g. eoe1.idb -> eoe1.sw / eoe1.man). Lets a bare .idb path extract,
+    # which is what `find ... -exec sgix.py --irix 3 {} --out dir` expects.
+    # Only when extracting, so a bare `.idb` with no --out still just parses.
+    if outdir:
+        stem = idb[:-4] if idb.endswith('.idb') else os.path.splitext(idb)[0]
+        if not sw and os.path.exists(stem + '.sw'):
+            sw = stem + '.sw'
+        if not man and os.path.exists(stem + '.man'):
+            man = stem + '.man'
+
     if fmt.split_archives and sw and not man:
         print('warning: --irix 3 typically needs a .man archive too',
               file=sys.stderr)
