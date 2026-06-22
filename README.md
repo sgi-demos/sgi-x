@@ -1,65 +1,132 @@
 # SGI Extractor
 
-Extracts files from `*.sw`, `*.idb`, `*.man` install images.  This is a Python fork of https://github.com/depp/sgix, expanded to handle all IRIX releases (3, 4, 5, 6).  The goal with this fork is to be able to extract SGI demo source and man pages, so it has only been tested on install files containing those things. IRIX 4 is currently untested.
+`sgix.py` extracts files from SGI IRIX install images — the `*.idb` index plus
+its data archives (`*.sw`, `*.man`, and other per-product images). It is a
+Python fork of the Go version of this tool at https://github.com/depp/sgix, expanded to handle all IRIX generations (3-6), with versions auto-detected, and aiming for 100% extraction rate.
+
+Tested against IRIX 3.3 (tape images), 4.01, 5.1.1, and 6.5 on Windows so far.  More testing to come on Mac and Linux.
 
 ## Requirements
 
-- Python 3.9 or newer. Standard library only is needed.
-- `uncompress`, automatically used to decompress LZW-compressed (`cmpsize`) entries.
-- `gzip`, automatically used to decompress inline `.z` entries on IRIX 5/6.
-- `gunzip`, manually used to decompress IRIX 3 `.z` man pages after extraction.
+- Python 3.9 or newer. Standard library only for the core.
+- A decompressor for LZW (`.Z`) data, in this order of preference:
+  - `uncompresspy` (recommended) — a pure-Python module used **in-process**, so
+    there's no per-file subprocess. Install with `pip install uncompresspy`
+    (on MSYS2: `pip install --break-system-packages uncompresspy`).
+  - otherwise `uncompress`, or failing that `gzip` (which also decodes `.Z`),
+    invoked as an external command. On MSYS2 there's no `uncompress` package, so
+    `pacman -S gzip` covers the fallback.
+- Some extracted man pages are still compressed on disk (`.z`, in SGI `pack` or
+  `compress` format). Decompress them afterward with `gunzip`/`zcat` (compress
+  format) or `pcat`/`unpack` (pack format) — check the first two bytes if unsure
+  (`1f 9d` = compress, `1f 1e` = pack).
 
 ## Usage
 
 ```
-sgix.py [--irix {3,4,5,6}] [-v] <file.idb> [<file.sw>] [<file.man>] [<output dir>]
+sgix.py [--irix {3,4,5,6}] [-v] <file.idb> [<archives...>] [<output dir>]
 ```
 
-- Specify arguments in any order.
-- Arguments `*.idb`, `*.sw`, and `*.man` are matched automatically by their suffix, and anything else is treated as the output directory.
-- Pass only the `.idb` file to parse the index and report how many entries are found.
+In the common case you only need the `.idb` and an output directory:
+
+```
+sgix.py eoe.idb -o outdir
+```
+
+The matching data archives (`eoe.sw`, `eoe.man`, and any others the index
+references) are found automatically next to the `.idb`. To sweep a whole
+distribution tree:
+
+```
+find . -name "*.idb" -print -exec sgix.py {} --out outdir \;
+```
+
+Behaviour:
+
+- Arguments may be given in any order. `*.idb`, `*.sw`, and `*.man` are matched
+  by suffix; anything else is the output directory.
+- The IRIX generation is auto-detected from the archive header; pass `--irix N`
+  only to override.
+- Pass only the `.idb` (no output dir) to just parse the index and report how
+  many entries it contains.
 
 Options:
-- `--irix {3,4,5,6}` — IRIX generation. Defaults to `6`. IRIX 3 needs the `.man` archive in addition to `.sw`.
-- `-o`, `--out DIR` — output directory. Omit it entirely to run in verify-only mode, which checks that every entry lines up with its archive but writes nothing.
-- `-v`, `--verbose` — emit a detailed trace (entry parsing, offset math, and per-file extraction steps) to stdout.
-- Explicit flags (`--idb`, `--sw`, `--man`, `-o/--out`) override the suffix matching if you need them.
 
-## Examples
+- `--irix {3,4,5,6}` — force the IRIX generation instead of auto-detecting.
+- `-o`, `--out DIR` — output directory. Omit it to run in verify-only mode,
+  which checks that every entry lines up with its archive but writes nothing.
+- `-v`, `--verbose` — emit a detailed trace (entry parsing, offset math, and
+  per-file extraction steps).
+- `--idb`, `--sw`, `--man` — name archives explicitly, overriding suffix
+  matching and auto-discovery.
 
-1. Extract an IRIX 5/6 tardist set from an IRIX ISO or tape image:
+## Output summary
+
+After each extraction, `sgix.py` prints a per-package summary comparing what was
+written against the index, e.g.:
 
 ```
-sgix.py dev.idb dev.sw outdir
+eoe.idb: 9310/9409 files extracted (99%)
+  not extracted: write error: 101 (e.g. illegal filename on Windows)
+  symlinks: 0 created, 1787 skipped (e.g. no privilege on Windows)
+  directories: 288
+  paths skipped: 1 (e.g. package root '.')
+  510.0 MB in 145.3s, 3.5 MB/s
 ```
 
-2. Extract the `gview` demo man page from an IRIX 3.3 tape image:
+Each summary is also appended to a single log file named after the output
+directory, so a sweep over a whole distribution collects every package's summary
+in one place:
 
 ```
-# Tape image from https://fsck.technology/software/Silicon%20Graphics/IRIX%20Install%20Media/SGI%20IRIX%204D1%203.3%20%28Tape%29/Tape%20Images.rar
-# Unarchive Tape Images.rar
-cd 4d1-3.3-eoe-tape-2
-sgix.py --irix 3 eoe2.idb eoe2.sw eoe2.man outdir
-cd outdir
-find . -name "*gview*" -print
-cd usr/catman/u_man/cat6
-gunzip -c gview.z > gview-man-page.txt
+find . -name "*.idb" -print -exec sgix.py {} --out /data/IRIX-6.5 \;
+# ... all summaries land in /data/IRIX-6.5.log
 ```
+
+Runs append rather than overwrite, so delete the log first if you want a fresh
+one (or extract into a new directory). Only the summary blocks are logged; the
+per-file `skip …` notices stay on stderr. Verify-only mode (no output dir)
+writes no log.
 
 ## How the IRIX versions differ
 
-`sgix.py` drives all per-version quirks from a single format table:
+`sgix.py` drives all per-version quirks from a single format table, selected by
+auto-detection:
 
-- **IRIX 3** splits the data across two archives: `.z` entries are read from the `.man` file and everything else from `.sw`.  The `.z` man pages are copied raw, symlinks in the index are not recreated, and sync or path problems are warned about and skipped rather than treated as fatal. Archive offsets start at 2.
-- **IRIX 5 and 6** use a single `.sw` archive, decompress inline `.z` entries with `gzip`, recreate symlinks, and treat any sync or unsafe-path issue as a hard error. Archive offsets start at 13.
-- **IRIX 4** is untested and uses the IRIX 5/6 layout.
+- Every entry's archive tag in the `.idb` (`product.image.subsystem`) names the
+  data archive that holds it, so a product can span several image files
+  (`sw`, `man`, and others like `sw64`, `books`, `src`, `cmplrs_sw`). Each is a
+  sibling file `<product>.<image>` and is routed and offset-tracked separately.
+  Compressed payloads (`cmpsize`) are inflated as LZW `.Z`.
+- **IRIX 3** archives have no header magic: entry data starts at offset 2 with
+  no per-entry header. Symlinks in the index are not recreated, and sync or path
+  problems are warned about and skipped rather than fatal.
+- **IRIX 4 / 5 / 6** archives start with an inst header magic (`imNNNVx00...`);
+  the version digit after `V` is what auto-detection reads. Entry data starts at
+  offset 13 behind a 2-byte per-entry header, and symlinks are recreated where
+  the operating system permits.
 
-In every version, an entry's compressed payload (`cmpsize`) is run through `uncompress` when present.
+## Platform notes
 
-## Further Development
- - Will fix bugs as necessary to extract files needed.
- - A hex editor (like https://hexfiend.com/) is useful for debugging (getting the info from the .idb to match the reality of the .sw and .man files).
+Extract on **macOS or Linux for archival-grade results**; use Windows only for
+convenience. The data and the tool are platform-independent, but the Windows
+filesystem (NTFS) can't represent some IRIX files faithfully:
 
+- **Illegal characters.** Names containing `:` are rejected by Windows — e.g.
+  the Perl module man pages (`Bundle::CPAN.z`, `CGI::Apache.z`, …) and the
+  `:saved` mail spool dirs. These are skipped on Windows; they extract fine on a
+  case-sensitive Unix filesystem.
+- **Case-only collisions.** IRIX ships files that differ only in case, such as
+  `usr/gfx/arch/*/libGL.so` vs `libgl.so`, and `app-defaults/Cdplayer` (a file)
+  alongside `app-defaults/cdplayer/` (a directory). On case-insensitive NTFS
+  these map to one name: one silently overwrites the other, or a file/dir clash
+  errors out. On Unix they coexist correctly.
+- **Symlinks and device nodes** need privileges (or Developer Mode) on Windows
+  and aren't created there; they're handled normally on Unix.
+
+The per-package summary reports how many files were skipped for these reasons,
+so a Windows run showing e.g. `9310/9409 (99%)` will typically be a full `100%`
+when the same media is extracted on macOS, Linux, or under WSL.
 
 ## License
 
