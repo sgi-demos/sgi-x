@@ -25,6 +25,7 @@ Tested against IRIX 3.3 (tape images), 4.01, 5.1.1, and 6.5 on Windows so far.  
 
 ```
 sgix.py [--irix {3,4,5,6}] [-v] <file.idb> [<archives...>] [<output dir>]
+sgix.py -r <dir> [-o <output dir>] [--irix {3,4,5,6}] [-v]
 ```
 
 In the common case you only need the `.idb` and an output directory:
@@ -34,11 +35,23 @@ sgix.py eoe.idb -o outdir
 ```
 
 The matching data archives (`eoe.sw`, `eoe.man`, and any others the index
-references) are found automatically next to the `.idb`. To sweep a whole
-distribution tree:
+references) are found automatically next to the `.idb`. To extract a whole
+distribution tree in one pass, point `-r` at its top directory:
 
 ```
-find . -name "*.idb" -print -exec sgix.py {} --out outdir \;
+sgix.py -r IRIX-6.5
+```
+
+This finds every `*.idb` under `IRIX-6.5`, auto-discovers each one's data
+archives, and extracts them all into a single `IRIX-6.5-output` directory
+(override the name with `-o`).
+
+To process several distribution trees at once, loop over them with a shell
+glob — each tree gets its own `<tree>-output`, and any tree already extracted
+is skipped on a re-run:
+
+```
+for d in */; do sgix.py -r "${d%/}"; done
 ```
 
 Behaviour:
@@ -49,10 +62,20 @@ Behaviour:
   only to override.
 - Pass only the `.idb` (no output dir) to just parse the index and report how
   many entries it contains.
+- `-r DIR` recursively finds every `*.idb` under `DIR` and extracts them all
+  into one auto-named `<DIR>-output` directory, auto-discovering each idb's data
+  archives. The other options still apply; positional files are ignored in this
+  mode.
+- If the output directory already exists, `sgix.py` prints a message and does
+  nothing — it never writes into or appends to an existing target. Remove it to
+  re-extract. This applies to both single-file and `-r` runs.
 
 Options:
 
 - `--irix {3,4,5,6}` — force the IRIX generation instead of auto-detecting.
+- `-r`, `--recursive DIR` — recursively find every `*.idb` under `DIR` and
+  extract them all into one auto-named `<DIR>-output` directory (override the
+  name with `-o`). Data archives are auto-discovered next to each idb.
 - `-o`, `--out DIR` — output directory. Omit it to run in verify-only mode,
   which checks that every entry lines up with its archive but writes nothing.
 - `-v`, `--verbose` — emit a detailed trace (entry parsing, offset math, and
@@ -75,18 +98,20 @@ eoe.idb: 9310/9409 files extracted (99%)
 ```
 
 Each summary is also appended to a single log file named after the output
-directory, so a sweep over a whole distribution collects every package's summary
-in one place:
+directory, so a `-r` sweep over a whole distribution collects every package's
+summary in one place:
 
 ```
-find . -name "*.idb" -print -exec sgix.py {} --out /data/IRIX-6.5 \;
-# ... all summaries land in /data/IRIX-6.5.log
+sgix.py -r /data/IRIX-6.5
+# ... all summaries land in /data/IRIX-6.5-output.log
 ```
 
-Runs append rather than overwrite, so delete the log first if you want a fresh
-one (or extract into a new directory). Only the summary blocks are logged; the
-per-file `skip …` notices stay on stderr. Verify-only mode (no output dir)
-writes no log.
+Within one run the log accumulates across packages (append, not overwrite).
+Since `sgix.py` won't write into an existing output directory, you can't append
+to a previous run's log by accident; to redo an extraction, remove both the
+`<output>` directory and its `<output>.log` first. Only the summary blocks are
+logged; the per-file `skip …` notices stay on stderr. Verify-only mode (no
+output dir) writes no log.
 
 ## How the IRIX versions differ
 

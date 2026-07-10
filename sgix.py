@@ -547,43 +547,22 @@ def _classify_positional(args: list[str]) -> tuple[Optional[str], Optional[str],
     return idb, sw, man, outdir
 
 
-def main(argv: list[str]) -> int:
-    p = argparse.ArgumentParser(
-        prog='sgix.py',
-        description='Extract SGI IRIX 3/4/5/6 install images (.idb + .sw [+ .man]).',
-        epilog=('examples:\n'
-                '  extract an .idb    sgix.py eoe.idb -o outdir\n'
-                '  extract a tree     find . -name "*.idb" -print -exec sgix.py {} -o outdir \\;'),
-                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('--irix', type=int, choices=[3, 4, 5, 6], default=None,
-                   help='IRIX generation (default: auto-detect from archive header)')
-    p.add_argument('--idb', help='IDB index file')
-    p.add_argument('--sw', help='.sw data archive')
-    p.add_argument('--man', help='.man data archive (IRIX 3 only)')
-    p.add_argument('-o', '--out', help='output directory (omit to verify only)')
-    p.add_argument('-v', '--verbose', action='store_true')
-    p.add_argument('files', nargs='*',
-                   help='positional files matched by suffix; non-matching arg is outdir')
-    ns = p.parse_args(argv)
+def run_one(idb: str, sw: Optional[str], man: Optional[str],
+            outdir: str, irix: Optional[int], verbose: bool,
+            log_path: str) -> int:
+    """Extract a single .idb into outdir, which the caller has already created.
 
-    idb, sw, man, outdir = _classify_positional(ns.files)
-    idb = ns.idb or idb
-    sw = ns.sw or sw
-    man = ns.man or man
-    outdir = ns.out or outdir
-
-    if not idb:
-        print('error: no .idb file specified', file=sys.stderr)
-        return 1
-
+    outdir == '' means verify-only (or, with no archives, parse-and-count).
+    Returns a process-style exit code (0 ok, 1 on a hard error). Does not create
+    or guard the output directory; that is the caller's responsibility so the
+    recursive driver can create one shared directory for the whole sweep."""
     idb_dir = os.path.dirname(idb)
     stem = os.path.basename(idb)
     stem = stem[:-4] if stem.endswith('.idb') else os.path.splitext(stem)[0]
 
-    # Pick the IRIX generation: explicit --irix wins; otherwise sniff a sibling
+    # Pick the IRIX generation: explicit irix wins; otherwise sniff a sibling
     # data archive's header. Probe an explicit/likely archive first, else any
     # <stem>.<image> file next to the idb.
-    irix = ns.irix
     if irix is None:
         probe = None
         for cand in (sw, man, os.path.join(idb_dir, stem + '.sw'),
@@ -598,20 +577,20 @@ def main(argv: list[str]) -> int:
                     break
         if probe:
             irix = detect_irix(probe) or 6
-            if ns.verbose:
+            if verbose:
                 print(f'detected IRIX {irix} from {os.path.basename(probe)}',
                       file=sys.stderr)
         else:
             irix = 6  # no archive to sniff (parse-only); version is moot here
     fmt = FORMATS[irix]
 
-    if ns.verbose:
+    if verbose:
         # Reproduce the reference Go tool's header (printed before readIDB).
         vprint("INFO: idb = ", idb or "", "\nsw = ", sw or "",
             "\nman = ", man or "", "\noutput = ", outdir or "")
 
     try:
-        entries = read_idb(idb, fmt, ns.verbose)
+        entries = read_idb(idb, fmt, verbose)
     except (OSError, ValueError) as ex:
         print(f'error: {ex}', file=sys.stderr)
         return 1
@@ -628,7 +607,7 @@ def main(argv: list[str]) -> int:
 
     # Bare `.idb` with no output dir and no named archive: just report the count.
     if not outdir and not explicit:
-        if not ns.verbose:
+        if not verbose:
             print(f'parsed {len(entries)} entries from {idb}')
         return 0
 
@@ -660,10 +639,7 @@ def main(argv: list[str]) -> int:
               f'(looked for {stem}.<image>); those files were skipped',
               file=sys.stderr)
 
-    if outdir:
-        os.makedirs(outdir, exist_ok=True)
-
-    if ns.verbose:
+    if verbose:
         vprint("RUNNING EXTRACT", sw or "", man or "", outdir or "", "\n")
     elif outdir:
         print(f'Extracting to {outdir} (irix {irix})...')
@@ -673,14 +649,11 @@ def main(argv: list[str]) -> int:
     err = None
     t0 = time.monotonic()
     try:
-        extract(entries, sources, outdir or '', fmt, ns.verbose)
+        extract(entries, sources, outdir or '', fmt, verbose)
     except (OSError, RuntimeError, EOFError) as ex:
         err = ex  # report after the summary, so the summary always prints
     elapsed = time.monotonic() - t0
 
-    # One log per output directory (not per idb): "<output_dir>.log" beside the
-    # directory, appended to across a sweep so every package lands in one file.
-    log_path = (os.path.normpath(outdir) + '.log') if outdir else ''
     _summarize(idb, entries, missing, fmt, extracted=bool(outdir),
                elapsed=elapsed, log_path=log_path)
 
@@ -688,6 +661,115 @@ def main(argv: list[str]) -> int:
         print(f'error: {err}', file=sys.stderr)
         return 1
     return 0
+
+
+# Recursive sweep -------------------------------------------------------------
+
+def _find_idbs(root: str) -> list[str]:
+    """Every *.idb under root, sorted, for a deterministic extraction order."""
+    found: list[str] = []
+    for dirpath, _dirs, files in os.walk(root):
+        for fn in files:
+            if fn.endswith('.idb'):
+                found.append(os.path.join(dirpath, fn))
+    found.sort()
+    return found
+
+
+def run_recursive(root: str, outdir: Optional[str], irix: Optional[int],
+                  verbose: bool) -> int:
+    """Find every *.idb under root and extract them all into one directory.
+
+    Replaces the old `find <root> -name '*.idb' -exec sgix.py {} --out DIR \\;`
+    sweep: archives are auto-discovered per idb, the output directory is
+    auto-named `<root>-output` (override with -o), and a single shared
+    `<output>.log` collects every package's summary. If the output directory
+    already exists, prints a message and does nothing."""
+    if not os.path.isdir(root):
+        print(f"error: -r/--recursive needs a directory; '{root}' is not one",
+              file=sys.stderr)
+        return 1
+
+    if outdir is None:
+        outdir = os.path.normpath(root) + '-output'
+
+    if os.path.exists(outdir):
+        print(f"output directory '{outdir}' already exists; doing nothing "
+              "(remove it to re-extract)")
+        return 0
+
+    idbs = _find_idbs(root)
+    if not idbs:
+        print(f"no .idb files found under {root}", file=sys.stderr)
+        return 1
+
+    os.makedirs(outdir)
+    log_path = os.path.normpath(outdir) + '.log'
+    print(f"found {len(idbs)} .idb file(s) under {root}; "
+          f"extracting all into {outdir}")
+
+    rc = 0
+    for idb in idbs:
+        print(idb)   # echo each idb as it is processed, like `find -print`
+        r = run_one(idb, None, None, outdir, irix, verbose, log_path)
+        if r:
+            rc = r   # remember a failure but keep sweeping the rest
+    return rc
+
+
+# CLI -------------------------------------------------------------------------
+
+def main(argv: list[str]) -> int:
+    p = argparse.ArgumentParser(
+        prog='sgix.py',
+        description='Extract SGI IRIX 3/4/5/6 install images (.idb + .sw [+ .man]).',
+        epilog=('examples:\n'
+                '  extract an .idb      sgix.py eoe.idb -o outdir\n'
+                '  extract a tree       sgix.py -r IRIX-6.5\n'
+                '  extract many trees   for d in */; do sgix.py -r "${d%/}"; done'),
+                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--irix', type=int, choices=[3, 4, 5, 6], default=None,
+                   help='IRIX generation (default: auto-detect from archive header)')
+    p.add_argument('-r', '--recursive', metavar='DIR',
+                   help='recursively find every *.idb under DIR and extract them '
+                        'all into a single auto-named "<DIR>-output" directory '
+                        '(override the name with -o). Data archives are '
+                        'auto-discovered next to each idb. Other options still '
+                        'apply; positional files are ignored in this mode.')
+    p.add_argument('--idb', help='IDB index file')
+    p.add_argument('--sw', help='.sw data archive')
+    p.add_argument('--man', help='.man data archive (IRIX 3 only)')
+    p.add_argument('-o', '--out', help='output directory (omit to verify only)')
+    p.add_argument('-v', '--verbose', action='store_true')
+    p.add_argument('files', nargs='*',
+                   help='positional files matched by suffix; non-matching arg is outdir')
+    ns = p.parse_args(argv)
+
+    # Recursive sweep: auto-discovery + auto output naming, driven by -r DIR.
+    if ns.recursive is not None:
+        return run_recursive(ns.recursive, ns.out, ns.irix, ns.verbose)
+
+    idb, sw, man, outdir = _classify_positional(ns.files)
+    idb = ns.idb or idb
+    sw = ns.sw or sw
+    man = ns.man or man
+    outdir = ns.out or outdir
+
+    if not idb:
+        print('error: no .idb file specified', file=sys.stderr)
+        return 1
+
+    # Don't clobber or append into an existing target: refuse and do nothing.
+    if outdir and os.path.exists(outdir):
+        print(f"output directory '{outdir}' already exists; doing nothing "
+              "(remove it to re-extract)")
+        return 0
+    if outdir:
+        os.makedirs(outdir)
+
+    # One log per output directory: "<output_dir>.log" beside the directory.
+    log_path = (os.path.normpath(outdir) + '.log') if outdir else ''
+    return run_one(idb, sw, man, outdir or '', ns.irix, ns.verbose, log_path)
 
 
 if __name__ == '__main__':
