@@ -553,7 +553,7 @@ def main(argv: list[str]) -> int:
         description='Extract SGI IRIX 3/4/5/6 install images (.idb + .sw [+ .man]).',
         epilog=('examples:\n'
                 '  extract an .idb    sgix.py eoe.idb -o outdir\n'
-                '  extract a tree     find . -name "*.idb" -print -exec sgix.py {} -o outdir \;'),
+                '  extract a tree     find . -name "*.idb" -print -exec sgix.py {} -o outdir \\;'),
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--irix', type=int, choices=[3, 4, 5, 6], default=None,
                    help='IRIX generation (default: auto-detect from archive header)')
