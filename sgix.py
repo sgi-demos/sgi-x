@@ -551,9 +551,10 @@ def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(
         prog='sgix.py',
         description='Extract SGI IRIX 3/4/5/6 install images (.idb + .sw [+ .man]).',
-        epilog=('Positional files are recognized by suffix (.idb, .sw, .man); '
-                'anything else is treated as the output directory. Explicit '
-                'flags (--idb/--sw/--man/-o) override positional matches.'))
+        epilog=('examples:\n'
+                '  extract an .idb    sgix.py eoe.idb -o outdir\n'
+                '  extract a tree     find . -name "*.idb" -print -exec sgix.py {} -o outdir \;'),
+                formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--irix', type=int, choices=[3, 4, 5, 6], default=None,
                    help='IRIX generation (default: auto-detect from archive header)')
     p.add_argument('--idb', help='IDB index file')
